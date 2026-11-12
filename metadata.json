@@ -1,0 +1,6 @@
+{
+  "name": "TrocVoisins",
+  "description": "Plateforme de don et troc d'objets entre voisins avec carte de quartier, vérification de zone et messagerie directe.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

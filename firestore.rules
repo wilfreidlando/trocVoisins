@@ -1,0 +1,211 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isMediator() {
+      return isSignedIn() && (
+        request.auth.token.email == 'projett411@gmail.com' ||
+        exists(/databases/$(database)/documents/mediators/$(request.auth.uid))
+      );
+    }
+
+    // 1. User validation helper
+    function isValidUser(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
+             data.email is string && data.email.size() <= 150 &&
+             data.role in ['CITOYEN', 'ASSOCIATION', 'MEDIATEUR'] &&
+             data.city in ['Douala', 'Yaoundé', 'Bafoussam', 'Garoua'] &&
+             data.neighborhood is string && data.neighborhood.size() <= 100 &&
+             (!('landmark' in data) || (data.landmark is string && data.landmark.size() <= 150)) &&
+             (!('actionRadiusKm' in data) || data.actionRadiusKm is number) &&
+             data.grainesBalance is number && data.grainesBalance >= 0 &&
+             (!('rating' in data) || data.rating is number) &&
+             (!('reviewsCount' in data) || data.reviewsCount is int) &&
+             (!('isAssociationCertified' in data) || data.isAssociationCertified is bool);
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       isValidUser(incoming());
+
+      allow update: if (isOwner(userId) || isMediator()) &&
+                       isValidId(userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       isValidUser(incoming());
+
+      allow delete: if isOwner(userId) || isMediator();
+    }
+
+    // 2. Item validation helper
+    function isValidItem(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.ownerId is string && data.ownerId.size() <= 128 &&
+             data.ownerName is string && data.ownerName.size() <= 100 &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 120 &&
+             data.description is string && data.description.size() <= 2000 &&
+             data.category is string && data.category.size() <= 50 &&
+             data.condition is string && data.condition.size() <= 50 &&
+             data.exchangeType in ['DON', 'TROC', 'DON_ORPHELINAT_PRIORITAIRE'] &&
+             (!('desiredExchange' in data) || (data.desiredExchange is string && data.desiredExchange.size() <= 200)) &&
+             (!('grainesValue' in data) || data.grainesValue is number) &&
+             data.city in ['Douala', 'Yaoundé', 'Bafoussam', 'Garoua'] &&
+             data.neighborhood is string && data.neighborhood.size() <= 100 &&
+             (!('approxLandmark' in data) || (data.approxLandmark is string && data.approxLandmark.size() <= 150)) &&
+             (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000)) &&
+             data.status in ['DISPONIBLE', 'RESERVE', 'DONNE', 'SUSPENDU'] &&
+             (!('reservedByUserId' in data) || (data.reservedByUserId is string && data.reservedByUserId.size() <= 128)) &&
+             (!('aiConfidence' in data) || data.aiConfidence is number);
+    }
+
+    match /items/{itemId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(itemId) &&
+                       incoming().ownerId == request.auth.uid &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       isValidItem(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(itemId) &&
+                       incoming().id == existing().id &&
+                       incoming().ownerId == existing().ownerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidItem(incoming()) && (
+                         // Owner can update details or reservation
+                         existing().ownerId == request.auth.uid ||
+                         // Any signed-in user can reserve if available
+                         (existing().status == 'DISPONIBLE' && incoming().status == 'RESERVE' && incoming().reservedByUserId == request.auth.uid) ||
+                         // Mediator moderation
+                         isMediator()
+                       );
+
+      allow delete: if isSignedIn() && (existing().ownerId == request.auth.uid || isMediator());
+    }
+
+    // 3. Fundraiser validation helper
+    function isValidFundraiser(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.associationId is string && data.associationId.size() <= 128 &&
+             data.associationName is string && data.associationName.size() <= 120 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
+             data.description is string && data.description.size() <= 3000 &&
+             data.city in ['Douala', 'Yaoundé', 'Bafoussam', 'Garoua'] &&
+             data.neighborhood is string && data.neighborhood.size() <= 100 &&
+             data.targetFcfa is number && data.targetFcfa > 0 &&
+             data.currentFcfa is number && data.currentFcfa >= 0 &&
+             (!('targetGraines' in data) || data.targetGraines is number) &&
+             (!('currentGraines' in data) || data.currentGraines is number) &&
+             (!('contributorsCount' in data) || data.contributorsCount is int) &&
+             (!('isEmergency' in data) || data.isEmergency is bool);
+    }
+
+    match /fundraisers/{fundraiserId} {
+      allow get, list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(fundraiserId) &&
+                       incoming().associationId == request.auth.uid &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       isValidFundraiser(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(fundraiserId) &&
+                       incoming().id == existing().id &&
+                       incoming().associationId == existing().associationId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidFundraiser(incoming()) && (
+                         existing().associationId == request.auth.uid ||
+                         // Contributing updates currentFcfa / currentGraines / contributorsCount
+                         incoming().diff(existing()).affectedKeys().hasOnly(['currentFcfa', 'currentGraines', 'contributorsCount']) ||
+                         isMediator()
+                       );
+
+      allow delete: if isSignedIn() && (existing().associationId == request.auth.uid || isMediator());
+    }
+
+    // 4. Dispute validation helper
+    function isValidDispute(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.itemId is string && data.itemId.size() <= 128 &&
+             data.itemTitle is string && data.itemTitle.size() <= 150 &&
+             data.reportedByUserId is string && data.reportedByUserId.size() <= 128 &&
+             data.reporterName is string && data.reporterName.size() <= 100 &&
+             data.targetUserId is string && data.targetUserId.size() <= 128 &&
+             data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 1000 &&
+             data.status in ['OUVERT', 'EN_MEDIATION', 'RESOLU'] &&
+             (!('resolutionNote' in data) || (data.resolutionNote is string && data.resolutionNote.size() <= 1000)) &&
+             (!('mediatorId' in data) || (data.mediatorId is string && data.mediatorId.size() <= 128));
+    }
+
+    match /disputes/{disputeId} {
+      allow get: if isSignedIn() && (
+        resource.data.reportedByUserId == request.auth.uid ||
+        resource.data.targetUserId == request.auth.uid ||
+        isMediator()
+      );
+
+      allow list: if isSignedIn() && (
+        resource.data.reportedByUserId == request.auth.uid ||
+        isMediator()
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(disputeId) &&
+                       incoming().reportedByUserId == request.auth.uid &&
+                       incoming().status == 'OUVERT' &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       isValidDispute(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(disputeId) &&
+                       incoming().id == existing().id &&
+                       incoming().reportedByUserId == existing().reportedByUserId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidDispute(incoming()) &&
+                       isMediator();
+
+      allow delete: if isMediator();
+    }
+  }
+}
