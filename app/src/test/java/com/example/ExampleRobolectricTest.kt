@@ -2,8 +2,8 @@ package com.example
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.example.data.local.SeedData
-import com.example.data.model.ExchangeType
+import com.example.data.model.GrainLevel
+import com.example.data.model.GrainRules
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,19 +23,15 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `seed data contains Cameroon donations, fundraisers, and collection hubs`() {
-    val items = SeedData.sampleItems
-    assertTrue(items.isNotEmpty())
-    val hasDouala = items.any { it.city == "Douala" }
-    val hasYaounde = items.any { it.city == "Yaoundé" }
-    assertTrue(hasDouala)
-    assertTrue(hasYaounde)
+  fun `grain levels follow total earned`() {
+    assertEquals(GrainLevel.GRAINE, GrainLevel.forTotal(0))
+    assertEquals(GrainLevel.POUSSE, GrainLevel.forTotal(GrainRules.TRUSTED_THRESHOLD))
+    assertEquals(GrainLevel.ARBRE, GrainLevel.forTotal(200))
+    assertEquals(GrainLevel.FORET, GrainLevel.forTotal(10_000))
+  }
 
-    val fundraisers = SeedData.sampleFundraisers
-    assertTrue(fundraisers.isNotEmpty())
-    assertTrue(fundraisers.any { it.targetAmountFcfa > 0 })
-
-    val collectionPoints = SeedData.sampleCollectionPoints
-    assertTrue(collectionPoints.isNotEmpty())
+  @Test
+  fun `a new member can receive a gift before giving`() {
+    assertTrue(GrainRules.WELCOME >= GrainRules.DON_RECEIVE_COST)
   }
 }
