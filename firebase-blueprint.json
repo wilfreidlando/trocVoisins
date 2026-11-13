@@ -1,113 +1,19 @@
 {
-  "entities": {
-    "User": {
-      "title": "User Profile",
-      "description": "User account in TrocVoisins CM (Citoyen, Association, Mediateur)",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string", "description": "The UID matching auth.uid" },
-        "name": { "type": "string", "description": "Display name" },
-        "email": { "type": "string", "description": "User email address" },
-        "role": { "type": "string", "description": "CITOYEN, ASSOCIATION, or MEDIATEUR" },
-        "city": { "type": "string", "description": "Douala or Yaoundé" },
-        "neighborhood": { "type": "string", "description": "Cameroon neighborhood (e.g. Bastos, Akwa)" },
-        "landmark": { "type": "string", "description": "Carrefour or known landmark" },
-        "actionRadiusKm": { "type": "number", "description": "Barter search radius in km" },
-        "grainesBalance": { "type": "number", "description": "Solidarity grain balance" },
-        "rating": { "type": "number", "description": "Average user rating" },
-        "reviewsCount": { "type": "number", "description": "Number of reviews received" },
-        "isAssociationCertified": { "type": "boolean", "description": "Certification flag for associations" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via FieldValue.serverTimestamp()" },
-        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp via FieldValue.serverTimestamp()" }
-      },
-      "required": ["userId", "name", "email", "role", "city", "neighborhood", "grainesBalance", "createdAt"]
-    },
-    "Item": {
-      "title": "Barter / Donation Item",
-      "description": "An item published for donation, barter, or prioritized for an orphanage",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "description": "Item ID" },
-        "ownerId": { "type": "string", "description": "Owner user ID" },
-        "ownerName": { "type": "string", "description": "Owner display name" },
-        "title": { "type": "string", "description": "Title of the object" },
-        "description": { "type": "string", "description": "Detailed description" },
-        "category": { "type": "string", "description": "Category name" },
-        "condition": { "type": "string", "description": "Item condition (NEUF, BON_ETAT, etc.)" },
-        "exchangeType": { "type": "string", "description": "DON, TROC, or DON_ORPHELINAT_PRIORITAIRE" },
-        "desiredExchange": { "type": "string", "description": "What is sought in exchange if barter" },
-        "grainesValue": { "type": "number", "description": "Grain cost if barter" },
-        "city": { "type": "string", "description": "City" },
-        "neighborhood": { "type": "string", "description": "Neighborhood" },
-        "approxLandmark": { "type": "string", "description": "300m privacy blurred landmark" },
-        "imageUrl": { "type": "string", "description": "Photo URI or image URL" },
-        "status": { "type": "string", "description": "DISPONIBLE, RESERVE, DONNE, or SUSPENDU" },
-        "reservedByUserId": { "type": "string", "description": "User ID who reserved the item" },
-        "aiConfidence": { "type": "number", "description": "AI categorization confidence" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via FieldValue.serverTimestamp()" },
-        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp via FieldValue.serverTimestamp()" }
-      },
-      "required": ["id", "ownerId", "ownerName", "title", "description", "category", "condition", "exchangeType", "city", "neighborhood", "status", "createdAt"]
-    },
-    "Fundraiser": {
-      "title": "Solidarity Fundraiser / Cagnotte",
-      "description": "Charity campaign for orphanages, flood relief, back to school",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "description": "Fundraiser ID" },
-        "associationId": { "type": "string", "description": "Organizer association ID" },
-        "associationName": { "type": "string", "description": "Organizer name" },
-        "title": { "type": "string", "description": "Fundraiser campaign title" },
-        "description": { "type": "string", "description": "Campaign description" },
-        "city": { "type": "string", "description": "Target city" },
-        "neighborhood": { "type": "string", "description": "Target neighborhood" },
-        "targetFcfa": { "type": "number", "description": "FCFA goal" },
-        "currentFcfa": { "type": "number", "description": "Current FCFA gathered" },
-        "targetGraines": { "type": "number", "description": "Graines goal" },
-        "currentGraines": { "type": "number", "description": "Current Graines gathered" },
-        "contributorsCount": { "type": "number", "description": "Total contributors" },
-        "isEmergency": { "type": "boolean", "description": "Emergency alert flag" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via FieldValue.serverTimestamp()" }
-      },
-      "required": ["id", "associationId", "associationName", "title", "description", "city", "neighborhood", "targetFcfa", "currentFcfa", "createdAt"]
-    },
-    "Dispute": {
-      "title": "Mediation Dispute",
-      "description": "Arbitration report for disputes or non-conforming items",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "description": "Dispute ID" },
-        "itemId": { "type": "string", "description": "Contested item ID" },
-        "itemTitle": { "type": "string", "description": "Contested item title" },
-        "reportedByUserId": { "type": "string", "description": "Reporting user ID" },
-        "reporterName": { "type": "string", "description": "Reporting user name" },
-        "targetUserId": { "type": "string", "description": "Target user ID" },
-        "reason": { "type": "string", "description": "Dispute reason" },
-        "status": { "type": "string", "description": "OUVERT, EN_MEDIATION, or RESOLU" },
-        "resolutionNote": { "type": "string", "description": "Mediation resolution verdict" },
-        "mediatorId": { "type": "string", "description": "Mediator user ID" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via FieldValue.serverTimestamp()" },
-        "resolvedAt": { "type": "string", "format": "date-time", "description": "Resolution timestamp via FieldValue.serverTimestamp()" }
-      },
-      "required": ["id", "itemId", "itemTitle", "reportedByUserId", "reporterName", "targetUserId", "reason", "status", "createdAt"]
-    }
-  },
-  "firestore": {
-    "/users/{userId}": {
-      "schema": "User",
-      "description": "User profiles partitioned by auth UID"
-    },
-    "/items/{itemId}": {
-      "schema": "Item",
-      "description": "Community items catalog for Cameroon solidarity exchange"
-    },
-    "/fundraisers/{fundraiserId}": {
-      "schema": "Fundraiser",
-      "description": "Charitable fundraisers and cagnottes"
-    },
-    "/disputes/{disputeId}": {
-      "schema": "Dispute",
-      "description": "Community mediation cases overseen by neighborhood mediators"
-    }
+  "version": 2,
+  "description": "TrocVoisins CM - schéma Firestore (source de vérité, écoutes temps réel)",
+  "collections": {
+    "users/{uid}": "profil, rôle (CITOYEN|ASSOCIATION|MEDIATEUR), grains, totalGrainsEarned, ratingSum, reviewCount, statut association, suspension",
+    "users/{uid}/ledger/{refId_REASON}": "journal des Graines, justifié par un échange COMPLETED",
+    "items/{itemId}": "annonce DON|TROC, statut PENDING_MODERATION|AVAILABLE|RESERVED|COMPLETED|REJECTED|SUSPENDED, photo base64",
+    "requests/{itemId_requesterId}": "demande PENDING|ACCEPTED|DECLINED|CANCELLED",
+    "chats/{itemId_requesterId}": "participants[] + sous-collection messages",
+    "fundraisers/{id}": "cagnotte PENDING_REVIEW|ACTIVE|FUNDED|CLOSED|REJECTED",
+    "contributions/{id}": "don en Graines (immédiat) ou promesse FCFA (confirmée par l'association)",
+    "collectionPoints/{id}": "points relais",
+    "disputes/{id}": "signalement OPEN|UNDER_REVIEW|RESOLVED|DISMISSED avec action du médiateur",
+    "reviews/{itemId_authorId}": "un avis par partie et par échange terminé",
+    "notifications/{id}": "notifications (au mieux)",
+    "adminSetup/{code}": "amorçage unique du premier administrateur",
+    "meta/admin": "marqueur : un administrateur existe"
   }
 }

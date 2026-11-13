@@ -248,7 +248,7 @@ fun FundraiserDetailScreen(vm: AppViewModel, id: String) {
             if (f.contactPhone.isNotBlank()) CallButton(f.contactPhone)
 
             if (canGive) {
-                if (f.targetGrains > 0 || true) PrimaryAction("Donner des Graines 🌾 (vous : ${me.grains})", { showGrains = true }, enabled = me.grains > 0 && !busy)
+                PrimaryAction("Donner des Graines 🌾 (vous : ${me.grains})", { showGrains = true }, enabled = me.grains > 0 && !busy)
                 if (f.targetFcfa > 0) SecondaryAction("Promettre un don en FCFA", { showFcfa = true })
                 InfoBanner(
                     "Votre don en FCFA est une promesse : il est compté quand l'association confirme l'avoir reçu. Ne payez que selon les instructions ci-dessus.",
