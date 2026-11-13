@@ -1,211 +1,599 @@
 rules_version = '2';
+
+// =====================================================================================
+//  TrocVoisins : règles de sécurité Firestore
+//
+//  Principes :
+//   - Le rôle MEDIATEUR ne s'obtient JAMAIS par l'application : uniquement par la
+//     « première installation » (code de configuration ci-dessous, utilisable une seule fois).
+//   - Un utilisateur ne peut pas modifier son rôle, son solde de Graines (hors grand livre),
+//     sa note ni sa certification.
+//   - Toute variation de Graines doit être justifiée par une ligne de grand livre elle-même
+//     justifiée par un échange réellement terminé (les deux parties ont confirmé).
+//
+//  À FAIRE AVANT DE DÉPLOYER : remplacer le code de configuration dans setupCode().
+//  Après avoir créé l'administrateur dans l'application, le code ne sert plus à rien.
+// =====================================================================================
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Default deny catch-all
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    // ---------------------------------------------------------------- constantes
+    function setupCode() { return 'CHANGEZ-MOI-AVANT-DEPLOIEMENT'; }
+    function welcomeGrains() { return 20; }
+    function donDonorGrains() { return 20; }
+    function donReceiveCost() { return 5; }
+    function trocEachGrains() { return 10; }
+    function reviewGrains() { return 2; }
+    function trustedThreshold() { return 60; }
+    function cities() { return ['Douala', 'Yaoundé', 'Bafoussam', 'Garoua']; }
 
-    function isSignedIn() {
-      return request.auth != null;
-    }
+    // ---------------------------------------------------------------- aides générales
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function changedOnly(keys) { return incoming().diff(existing()).affectedKeys().hasOnly(keys); }
+    function str(v, max) { return v is string && v.size() <= max; }
+    function nonEmpty(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
+    function userData(id) { return get(/databases/$(database)/documents/users/$(id)).data; }
+    function userDataAfter(id) { return getAfter(/databases/$(database)/documents/users/$(id)).data; }
+    function itemData(id) { return get(/databases/$(database)/documents/items/$(id)).data; }
+    function itemDataAfter(id) { return getAfter(/databases/$(database)/documents/items/$(id)).data; }
 
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
+    function profileExists() { return exists(/databases/$(database)/documents/users/$(uid())); }
+    function me() { return userData(uid()); }
 
     function isMediator() {
-      return isSignedIn() && (
-        request.auth.token.email == 'projett411@gmail.com' ||
-        exists(/databases/$(database)/documents/mediators/$(request.auth.uid))
-      );
+      return signedIn() && profileExists() && me().role == 'MEDIATEUR';
+    }
+    function isActiveMember() {
+      return signedIn() && profileExists() && me().isSuspended == false;
+    }
+    function isCertifiedAssociation() {
+      return isActiveMember() && me().role == 'ASSOCIATION' && me().associationStatus == 'CERTIFIED';
+    }
+    function isTrusted() {
+      return me().totalGrainsEarned >= trustedThreshold() || me().role == 'MEDIATEUR';
     }
 
-    // 1. User validation helper
-    function isValidUser(data) {
-      return data.userId is string && data.userId.size() <= 128 &&
-             data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
-             data.email is string && data.email.size() <= 150 &&
+    // =================================================================================
+    //  Première installation (création de l'unique administrateur)
+    // =================================================================================
+    match /adminSetup/{code} {
+      allow read: if false;
+      allow create: if signedIn() &&
+                       code == setupCode() &&
+                       incoming().uid == uid() &&
+                       !exists(/databases/$(database)/documents/meta/admin);
+    }
+
+    match /meta/{docId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn() &&
+                       docId == 'admin' &&
+                       incoming().uid == uid() &&
+                       !exists(/databases/$(database)/documents/meta/admin) &&
+                       existsAfter(/databases/$(database)/documents/adminSetup/$(setupCode()));
+      allow update, delete: if false;
+    }
+
+    // =================================================================================
+    //  Utilisateurs
+    // =================================================================================
+    function validNewUser(data, userId) {
+      return nonEmpty(data.name, 2, 100) &&
              data.role in ['CITOYEN', 'ASSOCIATION', 'MEDIATEUR'] &&
-             data.city in ['Douala', 'Yaoundé', 'Bafoussam', 'Garoua'] &&
-             data.neighborhood is string && data.neighborhood.size() <= 100 &&
-             (!('landmark' in data) || (data.landmark is string && data.landmark.size() <= 150)) &&
-             (!('actionRadiusKm' in data) || data.actionRadiusKm is number) &&
-             data.grainesBalance is number && data.grainesBalance >= 0 &&
-             (!('rating' in data) || data.rating is number) &&
-             (!('reviewsCount' in data) || data.reviewsCount is int) &&
-             (!('isAssociationCertified' in data) || data.isAssociationCertified is bool);
+             data.city in cities() &&
+             str(data.neighborhood, 100) && str(data.landmark, 150) &&
+             data.lat is number && data.lng is number &&
+             data.radiusKm is number &&
+             data.grains == welcomeGrains() &&
+             data.totalGrainsEarned == 0 &&
+             data.lastLedgerId == '' && data.lastReviewId == '' &&
+             data.ratingSum == 0 && data.reviewCount == 0 &&
+             data.giftsGiven == 0 && data.trocsCompleted == 0 &&
+             data.isSuspended == false && data.warnings == 0 &&
+             str(data.photoUrl, 500) &&
+             str(data.associationName, 120) && str(data.associationType, 40) &&
+             str(data.associationRegNumber, 60) && str(data.associationPhone, 30) &&
+             data.associationNote == '' &&
+             (data.role == 'ASSOCIATION'
+                ? (data.associationStatus == 'PENDING' &&
+                   nonEmpty(data.associationName, 2, 120) &&
+                   nonEmpty(data.associationRegNumber, 3, 60))
+                : data.associationStatus == 'NONE') &&
+             (data.role != 'MEDIATEUR' ||
+                (!exists(/databases/$(database)/documents/meta/admin) &&
+                 existsAfter(/databases/$(database)/documents/meta/admin) &&
+                 getAfter(/databases/$(database)/documents/meta/admin).data.uid == userId));
+    }
+
+    // Variation de Graines justifiée par une ligne de grand livre
+    function ledgerAfter(userId) {
+      return getAfter(/databases/$(database)/documents/users/$(userId)/ledger/$(incoming().lastLedgerId)).data;
+    }
+    function ledgerIsNew(userId) {
+      return !exists(/databases/$(database)/documents/users/$(userId)/ledger/$(incoming().lastLedgerId));
+    }
+    function grainsClaimOk(userId) {
+      return incoming().lastLedgerId != existing().lastLedgerId &&
+             ledgerIsNew(userId) &&
+             incoming().grains >= 0 &&
+             incoming().grains == existing().grains + ledgerAfter(userId).amount &&
+             incoming().totalGrainsEarned == existing().totalGrainsEarned +
+                (ledgerAfter(userId).amount > 0 ? ledgerAfter(userId).amount : 0) &&
+             incoming().giftsGiven == existing().giftsGiven + (ledgerAfter(userId).reason == 'DON_DONOR' ? 1 : 0) &&
+             incoming().trocsCompleted == existing().trocsCompleted + (ledgerAfter(userId).reason == 'TROC_DONE' ? 1 : 0);
+    }
+
+    function reviewStatsOk(userId) {
+      let rid = incoming().lastReviewId;
+      return rid != existing().lastReviewId &&
+             !exists(/databases/$(database)/documents/reviews/$(rid)) &&
+             getAfter(/databases/$(database)/documents/reviews/$(rid)).data.targetUserId == userId &&
+             getAfter(/databases/$(database)/documents/reviews/$(rid)).data.authorId == uid() &&
+             incoming().reviewCount == existing().reviewCount + 1 &&
+             incoming().ratingSum == existing().ratingSum +
+                getAfter(/databases/$(database)/documents/reviews/$(rid)).data.rating;
     }
 
     match /users/{userId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get, list: if signedIn();
 
-      allow create: if isOwner(userId) &&
-                       isValidId(userId) &&
-                       incoming().userId == request.auth.uid &&
-                       incoming().createdAt is timestamp &&
-                       incoming().createdAt <= request.time &&
-                       isValidUser(incoming());
+      allow create: if signedIn() && uid() == userId && validNewUser(incoming(), userId);
 
-      allow update: if (isOwner(userId) || isMediator()) &&
-                       isValidId(userId) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().updatedAt is timestamp &&
-                       incoming().updatedAt <= request.time &&
-                       isValidUser(incoming());
+      allow update: if signedIn() &&
+                       incoming().role == existing().role && (
+        // 1. Le propriétaire modifie son profil et sa localisation
+        (uid() == userId &&
+         changedOnly(['name', 'city', 'neighborhood', 'landmark', 'lat', 'lng', 'radiusKm', 'photoUrl', 'updatedAt']) &&
+         nonEmpty(incoming().name, 2, 100) && incoming().city in cities() &&
+         str(incoming().neighborhood, 100) && str(incoming().landmark, 150)) ||
+        // 2. Une association refusée corrige ses informations et redemande la certification
+        (uid() == userId && existing().role == 'ASSOCIATION' &&
+         existing().associationStatus == 'REJECTED' &&
+         changedOnly(['associationName', 'associationType', 'associationRegNumber', 'associationPhone',
+                      'associationStatus', 'associationNote', 'updatedAt']) &&
+         incoming().associationStatus == 'PENDING' && incoming().associationNote == '' &&
+         nonEmpty(incoming().associationName, 2, 120) && nonEmpty(incoming().associationRegNumber, 3, 60)) ||
+        // 3. Réclamation de Graines justifiée par le grand livre
+        (uid() == userId &&
+         changedOnly(['grains', 'totalGrainsEarned', 'lastLedgerId', 'giftsGiven', 'trocsCompleted', 'updatedAt']) &&
+         grainsClaimOk(userId)) ||
+        // 4. L'auteur d'un avis met à jour le cumul de notes du destinataire
+        (uid() != userId &&
+         changedOnly(['ratingSum', 'reviewCount', 'lastReviewId', 'updatedAt']) &&
+         reviewStatsOk(userId)) ||
+        // 5. Le médiateur certifie une association
+        (isMediator() &&
+         existing().role == 'ASSOCIATION' &&
+         changedOnly(['associationStatus', 'associationNote', 'updatedAt']) &&
+         incoming().associationStatus in ['CERTIFIED', 'REJECTED'] &&
+         str(incoming().associationNote, 500)) ||
+        // 6. Le médiateur avertit ou suspend un compte à l'issue d'un litige
+        (isMediator() &&
+         existing().role != 'MEDIATEUR' &&
+         changedOnly(['warnings', 'isSuspended', 'updatedAt']) &&
+         incoming().warnings == existing().warnings + 1)
+      );
 
-      allow delete: if isOwner(userId) || isMediator();
+      allow delete: if false;
+
+      // Grand livre de Graines (lecture : propriétaire ; création : justifiée par un échange terminé)
+      match /ledger/{entryId} {
+        allow get, list: if signedIn() && uid() == userId;
+
+        allow create: if signedIn() && uid() == userId &&
+                         incoming().refId is string &&
+                         entryId == incoming().refId + '_' + incoming().reason &&
+                         incoming().amount is int &&
+                         validLedger(userId, incoming());
+
+        allow update, delete: if false;
+      }
     }
 
-    // 2. Item validation helper
-    function isValidItem(data) {
-      return data.id is string && data.id.size() <= 128 &&
-             data.ownerId is string && data.ownerId.size() <= 128 &&
-             data.ownerName is string && data.ownerName.size() <= 100 &&
-             data.title is string && data.title.size() >= 2 && data.title.size() <= 120 &&
-             data.description is string && data.description.size() <= 2000 &&
-             data.category is string && data.category.size() <= 50 &&
-             data.condition is string && data.condition.size() <= 50 &&
-             data.exchangeType in ['DON', 'TROC', 'DON_ORPHELINAT_PRIORITAIRE'] &&
-             (!('desiredExchange' in data) || (data.desiredExchange is string && data.desiredExchange.size() <= 200)) &&
-             (!('grainesValue' in data) || data.grainesValue is number) &&
-             data.city in ['Douala', 'Yaoundé', 'Bafoussam', 'Garoua'] &&
-             data.neighborhood is string && data.neighborhood.size() <= 100 &&
-             (!('approxLandmark' in data) || (data.approxLandmark is string && data.approxLandmark.size() <= 150)) &&
-             (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000)) &&
-             data.status in ['DISPONIBLE', 'RESERVE', 'DONNE', 'SUSPENDU'] &&
-             (!('reservedByUserId' in data) || (data.reservedByUserId is string && data.reservedByUserId.size() <= 128)) &&
-             (!('aiConfidence' in data) || data.aiConfidence is number);
+    function validLedger(userId, e) {
+      return
+        // Don remis : +20 pour le donneur
+        (e.reason == 'DON_DONOR' && e.amount == donDonorGrains() &&
+         itemData(e.refId).status == 'COMPLETED' && itemData(e.refId).exchangeType == 'DON' &&
+         itemData(e.refId).donorId == userId) ||
+        // Don reçu : coût pour le receveur (gratuit si le donneur est une association)
+        (e.reason == 'DON_RECEIVED' && e.amount == -donReceiveCost() &&
+         itemData(e.refId).status == 'COMPLETED' && itemData(e.refId).exchangeType == 'DON' &&
+         itemData(e.refId).reservedByUserId == userId && itemData(e.refId).donorRole != 'ASSOCIATION') ||
+        // Troc réussi : +10 pour chaque partie
+        (e.reason == 'TROC_DONE' && e.amount == trocEachGrains() &&
+         itemData(e.refId).status == 'COMPLETED' && itemData(e.refId).exchangeType == 'TROC' &&
+         (itemData(e.refId).donorId == userId || itemData(e.refId).reservedByUserId == userId)) ||
+        // Complément de troc versé par le receveur
+        (e.reason == 'TOPUP_PAID' && e.amount < 0 &&
+         itemData(e.refId).status == 'COMPLETED' && itemData(e.refId).exchangeType == 'TROC' &&
+         itemData(e.refId).reservedByUserId == userId &&
+         get(/databases/$(database)/documents/requests/$(e.refId + '_' + userId)).data.graineTopUp == -e.amount) ||
+        // Complément reçu par le donneur : seulement après versement effectif par le receveur
+        (e.reason == 'TOPUP_RECEIVED' && e.amount > 0 &&
+         itemData(e.refId).status == 'COMPLETED' && itemData(e.refId).exchangeType == 'TROC' &&
+         itemData(e.refId).donorId == userId &&
+         exists(/databases/$(database)/documents/users/$(itemData(e.refId).reservedByUserId)/ledger/$(e.refId + '_TOPUP_PAID')) &&
+         get(/databases/$(database)/documents/users/$(itemData(e.refId).reservedByUserId)/ledger/$(e.refId + '_TOPUP_PAID')).data.amount == -e.amount) ||
+        // Avis laissé après un échange
+        (e.reason == 'REVIEW' && e.amount == reviewGrains() &&
+         exists(/databases/$(database)/documents/reviews/$(e.refId + '_' + userId))) ||
+        // Soutien à une cagnotte (dépense)
+        (e.reason == 'FUNDRAISER' && e.amount < 0 &&
+         getAfter(/databases/$(database)/documents/contributions/$(e.refId)).data.contributorId == userId &&
+         getAfter(/databases/$(database)/documents/contributions/$(e.refId)).data.grains == -e.amount &&
+         getAfter(/databases/$(database)/documents/contributions/$(e.refId)).data.status == 'CONFIRMED');
+    }
+
+    // =================================================================================
+    //  Annonces
+    // =================================================================================
+    function validItemBase(d) {
+      return nonEmpty(d.title, 2, 120) &&
+             str(d.description, 2000) &&
+             d.category in ['SCOLAIRE_EDUCATION', 'VETEMENTS_ENFANTS', 'MAISON_DECO', 'BRICOLAGE_OUTILS',
+                            'ELECTROMENAGER', 'LIVRES_LOISIRS', 'PLANTES_JARDIN', 'AUTRE'] &&
+             d.condition in ['NEUF', 'TRES_BON_ETAT', 'BON_ETAT', 'A_REPARER'] &&
+             d.exchangeType in ['DON', 'TROC'] &&
+             str(d.wantedInReturn, 200) &&
+             (d.exchangeType == 'TROC' || d.wantedInReturn == '') &&
+             d.city in cities() &&
+             str(d.neighborhood, 100) && str(d.landmark, 150) &&
+             d.approximateLat is number && d.approximateLng is number &&
+             str(d.imageB64, 400000) &&
+             d.isEmergencyResponse is bool && str(d.targetOrphanageName, 120);
     }
 
     match /items/{itemId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
+      allow get, list: if signedIn();
 
-      allow create: if isSignedIn() &&
-                       isValidId(itemId) &&
-                       incoming().ownerId == request.auth.uid &&
-                       incoming().createdAt is timestamp &&
-                       incoming().createdAt <= request.time &&
-                       isValidItem(incoming());
+      allow create: if isActiveMember() &&
+                       incoming().donorId == uid() &&
+                       incoming().donorName == (me().role == 'ASSOCIATION' ? me().associationName : me().name) &&
+                       incoming().donorRole == me().role &&
+                       incoming().donorCertified == (me().role == 'ASSOCIATION' && me().associationStatus == 'CERTIFIED') &&
+                       (me().role != 'ASSOCIATION' || me().associationStatus == 'CERTIFIED') &&
+                       incoming().createdAt == request.time &&
+                       incoming().reservedByUserId == '' && incoming().reservedByName == '' &&
+                       incoming().donorConfirmed == false && incoming().receiverConfirmed == false &&
+                       incoming().moderationNote == '' &&
+                       (incoming().status == 'PENDING_MODERATION' ||
+                        (incoming().status == 'AVAILABLE' && isTrusted())) &&
+                       validItemBase(incoming());
 
-      allow update: if isSignedIn() &&
-                       isValidId(itemId) &&
-                       incoming().id == existing().id &&
-                       incoming().ownerId == existing().ownerId &&
-                       incoming().createdAt == existing().createdAt &&
-                       isValidItem(incoming()) && (
-                         // Owner can update details or reservation
-                         existing().ownerId == request.auth.uid ||
-                         // Any signed-in user can reserve if available
-                         (existing().status == 'DISPONIBLE' && incoming().status == 'RESERVE' && incoming().reservedByUserId == request.auth.uid) ||
-                         // Mediator moderation
-                         isMediator()
-                       );
+      allow update: if isActiveMember() && (
+        // Le propriétaire accepte une demande : l'objet est réservé pour ce demandeur
+        (existing().donorId == uid() &&
+         existing().status == 'AVAILABLE' && incoming().status == 'RESERVED' &&
+         changedOnly(['status', 'reservedByUserId', 'reservedByName', 'donorConfirmed', 'receiverConfirmed', 'updatedAt']) &&
+         incoming().donorConfirmed == false && incoming().receiverConfirmed == false &&
+         incoming().reservedByUserId != uid() &&
+         getAfter(/databases/$(database)/documents/requests/$(itemId + '_' + incoming().reservedByUserId)).data.status == 'ACCEPTED') ||
+        // Confirmation de remise par le donneur
+        (existing().donorId == uid() &&
+         existing().status == 'RESERVED' &&
+         changedOnly(['donorConfirmed', 'status', 'updatedAt']) &&
+         incoming().donorConfirmed == true &&
+         incoming().status == (existing().receiverConfirmed ? 'COMPLETED' : 'RESERVED')) ||
+        // Confirmation de remise par le receveur
+        (existing().reservedByUserId == uid() &&
+         existing().status == 'RESERVED' &&
+         changedOnly(['receiverConfirmed', 'status', 'updatedAt']) &&
+         incoming().receiverConfirmed == true &&
+         incoming().status == (existing().donorConfirmed ? 'COMPLETED' : 'RESERVED')) ||
+        // Annulation de la réservation par l'une des deux parties
+        ((existing().donorId == uid() || existing().reservedByUserId == uid()) &&
+         existing().status == 'RESERVED' && incoming().status == 'AVAILABLE' &&
+         changedOnly(['status', 'reservedByUserId', 'reservedByName', 'donorConfirmed', 'receiverConfirmed', 'updatedAt']) &&
+         incoming().reservedByUserId == '' && incoming().reservedByName == '' &&
+         incoming().donorConfirmed == false && incoming().receiverConfirmed == false) ||
+        // Modération et suspension par le médiateur
+        (isMediator() &&
+         changedOnly(['status', 'moderationNote', 'updatedAt']) &&
+         incoming().status in ['AVAILABLE', 'REJECTED', 'SUSPENDED'] &&
+         existing().status != 'COMPLETED' &&
+         (existing().status != 'RESERVED' || incoming().status == 'SUSPENDED') &&
+         str(incoming().moderationNote, 500))
+      );
 
-      allow delete: if isSignedIn() && (existing().ownerId == request.auth.uid || isMediator());
+      allow delete: if signedIn() && (
+        (existing().donorId == uid() && existing().status != 'RESERVED' && existing().status != 'COMPLETED') ||
+        isMediator()
+      );
     }
 
-    // 3. Fundraiser validation helper
-    function isValidFundraiser(data) {
-      return data.id is string && data.id.size() <= 128 &&
-             data.associationId is string && data.associationId.size() <= 128 &&
-             data.associationName is string && data.associationName.size() <= 120 &&
-             data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
-             data.description is string && data.description.size() <= 3000 &&
-             data.city in ['Douala', 'Yaoundé', 'Bafoussam', 'Garoua'] &&
-             data.neighborhood is string && data.neighborhood.size() <= 100 &&
-             data.targetFcfa is number && data.targetFcfa > 0 &&
-             data.currentFcfa is number && data.currentFcfa >= 0 &&
-             (!('targetGraines' in data) || data.targetGraines is number) &&
-             (!('currentGraines' in data) || data.currentGraines is number) &&
-             (!('contributorsCount' in data) || data.contributorsCount is int) &&
-             (!('isEmergency' in data) || data.isEmergency is bool);
+    // =================================================================================
+    //  Demandes (don ou troc) : identifiant = annonce_demandeur
+    // =================================================================================
+    match /requests/{requestId} {
+      allow get, list: if signedIn() && (
+        existing().requesterId == uid() || existing().itemOwnerId == uid() || isMediator()
+      );
+
+      allow create: if isActiveMember() &&
+                       incoming().requesterId == uid() &&
+                       requestId == incoming().itemId + '_' + uid() &&
+                       incoming().itemOwnerId == itemData(incoming().itemId).donorId &&
+                       incoming().itemOwnerId != uid() &&
+                       itemData(incoming().itemId).status == 'AVAILABLE' &&
+                       incoming().status == 'PENDING' &&
+                       incoming().graineTopUp is int && incoming().graineTopUp >= 0 &&
+                       incoming().graineTopUp <= 30 &&
+                       incoming().graineTopUp <= me().grains &&
+                       (itemData(incoming().itemId).exchangeType == 'TROC' || incoming().graineTopUp == 0) &&
+                       (itemData(incoming().itemId).exchangeType == 'TROC' ||
+                        itemData(incoming().itemId).donorRole == 'ASSOCIATION' ||
+                        me().grains >= donReceiveCost()) &&
+                       str(incoming().message, 500) && str(incoming().requesterName, 120) && str(incoming().itemTitle, 150);
+
+      allow update: if isActiveMember() && (
+        // Le demandeur redemande après un refus ou une annulation
+        (existing().requesterId == uid() &&
+         existing().status in ['DECLINED', 'CANCELLED'] &&
+         changedOnly(['message', 'graineTopUp', 'status', 'updatedAt']) &&
+         incoming().status == 'PENDING' &&
+         incoming().graineTopUp is int && incoming().graineTopUp >= 0 && incoming().graineTopUp <= 30 &&
+         incoming().graineTopUp <= me().grains &&
+         itemData(existing().itemId).status == 'AVAILABLE' &&
+         (itemData(existing().itemId).exchangeType == 'TROC' || incoming().graineTopUp == 0) &&
+         str(incoming().message, 500)) ||
+        // Le demandeur annule sa demande en attente
+        (existing().requesterId == uid() &&
+         existing().status == 'PENDING' &&
+         changedOnly(['status', 'updatedAt']) && incoming().status == 'CANCELLED') ||
+        // Le propriétaire accepte (l'objet doit être réservé dans la même opération) ou refuse
+        (existing().itemOwnerId == uid() &&
+         existing().status == 'PENDING' &&
+         changedOnly(['status', 'updatedAt']) &&
+         ((incoming().status == 'ACCEPTED' &&
+           itemDataAfter(existing().itemId).status == 'RESERVED' &&
+           itemDataAfter(existing().itemId).reservedByUserId == existing().requesterId) ||
+          incoming().status == 'DECLINED')) ||
+        // Annulation de la réservation : la demande acceptée est annulée, l'objet redevient disponible
+        ((existing().requesterId == uid() || existing().itemOwnerId == uid()) &&
+         existing().status == 'ACCEPTED' &&
+         changedOnly(['status', 'updatedAt']) && incoming().status == 'CANCELLED' &&
+         itemDataAfter(existing().itemId).status == 'AVAILABLE')
+      );
+
+      allow delete: if false;
+    }
+
+    // =================================================================================
+    //  Messagerie : une conversation par annonce et par demandeur
+    // =================================================================================
+    match /chats/{chatId} {
+      allow get: if signedIn() && uid() in existing().participants;
+      allow list: if signedIn() && uid() in existing().participants;
+
+      allow create: if isActiveMember() &&
+                       incoming().participants.size() == 2 &&
+                       incoming().participants[0] == incoming().ownerId &&
+                       incoming().participants[1] == incoming().requesterId &&
+                       uid() in incoming().participants &&
+                       chatId == incoming().itemId + '_' + incoming().requesterId &&
+                       itemData(incoming().itemId).donorId == incoming().ownerId &&
+                       incoming().lastSenderId == uid() &&
+                       str(incoming().lastMessage, 200);
+
+      allow update: if isActiveMember() &&
+                       uid() in existing().participants &&
+                       changedOnly(['lastMessage', 'lastSenderId', 'lastMessageAt']) &&
+                       incoming().lastSenderId == uid() &&
+                       str(incoming().lastMessage, 200);
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get, list: if signedIn() &&
+          uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+
+        allow create: if isActiveMember() &&
+                         incoming().senderId == uid() &&
+                         uid() in getAfter(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+                         nonEmpty(incoming().text, 1, 1000) &&
+                         str(incoming().senderName, 120) &&
+                         incoming().isSystem is bool;
+
+        allow update, delete: if false;
+      }
+    }
+
+    // =================================================================================
+    //  Cagnottes solidaires
+    // =================================================================================
+    function validFundraiserBase(d) {
+      return nonEmpty(d.title, 3, 150) && str(d.description, 3000) &&
+             d.city in cities() && str(d.neighborhood, 100) &&
+             d.targetFcfa is int && d.targetFcfa >= 0 &&
+             d.targetGrains is int && d.targetGrains >= 0 &&
+             (d.targetFcfa > 0 || d.targetGrains > 0) &&
+             d.deadlineMs is int &&
+             d.isEmergency is bool &&
+             str(d.category, 40) && str(d.payInstructions, 500) &&
+             str(d.contactPhone, 30) && str(d.proofNote, 1000);
     }
 
     match /fundraisers/{fundraiserId} {
-      allow get, list: if isSignedIn();
+      allow get, list: if signedIn();
 
-      allow create: if isSignedIn() &&
-                       isValidId(fundraiserId) &&
-                       incoming().associationId == request.auth.uid &&
-                       incoming().createdAt is timestamp &&
-                       incoming().createdAt <= request.time &&
-                       isValidFundraiser(incoming());
+      allow create: if isCertifiedAssociation() &&
+                       incoming().associationId == uid() &&
+                       incoming().associationName == me().associationName &&
+                       incoming().status == 'PENDING_REVIEW' &&
+                       incoming().currentFcfa == 0 && incoming().currentGrains == 0 &&
+                       incoming().contributorsCount == 0 && incoming().lastContributionId == '' &&
+                       incoming().createdAt == request.time &&
+                       validFundraiserBase(incoming());
 
-      allow update: if isSignedIn() &&
-                       isValidId(fundraiserId) &&
-                       incoming().id == existing().id &&
-                       incoming().associationId == existing().associationId &&
-                       incoming().createdAt == existing().createdAt &&
-                       isValidFundraiser(incoming()) && (
-                         existing().associationId == request.auth.uid ||
-                         // Contributing updates currentFcfa / currentGraines / contributorsCount
-                         incoming().diff(existing()).affectedKeys().hasOnly(['currentFcfa', 'currentGraines', 'contributorsCount']) ||
-                         isMediator()
+      allow update: if isActiveMember() && (
+        // Validation par le médiateur
+        (isMediator() &&
+         existing().status == 'PENDING_REVIEW' &&
+         changedOnly(['status', 'updatedAt']) &&
+         incoming().status in ['ACTIVE', 'REJECTED']) ||
+        // Clôture par l'association
+        (existing().associationId == uid() &&
+         existing().status in ['ACTIVE', 'FUNDED'] &&
+         changedOnly(['status', 'updatedAt']) && incoming().status == 'CLOSED') ||
+        // L'association confirme la réception d'une promesse en FCFA
+        (existing().associationId == uid() &&
+         existing().status == 'ACTIVE' &&
+         changedOnly(['currentFcfa', 'contributorsCount', 'lastContributionId', 'status', 'updatedAt']) &&
+         incoming().lastContributionId != existing().lastContributionId &&
+         get(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.status == 'PLEDGED' &&
+         getAfter(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.status == 'CONFIRMED' &&
+         getAfter(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.fundraiserId == fundraiserId &&
+         incoming().currentFcfa == existing().currentFcfa +
+            getAfter(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.amountFcfa &&
+         incoming().contributorsCount == existing().contributorsCount + 1 &&
+         (incoming().status == existing().status ||
+          (incoming().status == 'FUNDED' && incoming().currentFcfa >= existing().targetFcfa))) ||
+        // Un membre soutient la cagnotte avec des Graines
+        (existing().status == 'ACTIVE' &&
+         changedOnly(['currentGrains', 'contributorsCount', 'lastContributionId', 'updatedAt']) &&
+         incoming().lastContributionId != existing().lastContributionId &&
+         !exists(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)) &&
+         getAfter(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.contributorId == uid() &&
+         getAfter(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.fundraiserId == fundraiserId &&
+         getAfter(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.status == 'CONFIRMED' &&
+         incoming().currentGrains == existing().currentGrains +
+            getAfter(/databases/$(database)/documents/contributions/$(incoming().lastContributionId)).data.grains &&
+         incoming().contributorsCount == existing().contributorsCount + 1)
+      );
+
+      allow delete: if false;
+    }
+
+    match /contributions/{contributionId} {
+      allow get, list: if signedIn() && (
+        existing().contributorId == uid() || existing().associationId == uid() || isMediator()
+      );
+
+      allow create: if isActiveMember() &&
+                       incoming().contributorId == uid() &&
+                       incoming().fundraiserId is string &&
+                       get(/databases/$(database)/documents/fundraisers/$(incoming().fundraiserId)).data.status == 'ACTIVE' &&
+                       incoming().associationId ==
+                          get(/databases/$(database)/documents/fundraisers/$(incoming().fundraiserId)).data.associationId &&
+                       incoming().isAnonymous is bool &&
+                       str(incoming().contributorName, 120) && str(incoming().fundraiserTitle, 150) &&
+                       (
+                         // Promesse en FCFA, à confirmer par l'association
+                         (incoming().status == 'PLEDGED' && incoming().grains == 0 &&
+                          incoming().amountFcfa is int && incoming().amountFcfa >= 100 &&
+                          incoming().amountFcfa <= 10000000) ||
+                         // Don de Graines : débité immédiatement via le grand livre
+                         (incoming().status == 'CONFIRMED' && incoming().amountFcfa == 0 &&
+                          incoming().grains is int && incoming().grains > 0 &&
+                          existsAfter(/databases/$(database)/documents/users/$(uid())/ledger/$(contributionId + '_FUNDRAISER')))
                        );
 
-      allow delete: if isSignedIn() && (existing().associationId == request.auth.uid || isMediator());
+      // Seule l'association destinataire confirme ou refuse une promesse en attente
+      allow update: if signedIn() &&
+                       existing().associationId == uid() &&
+                       existing().status == 'PLEDGED' &&
+                       changedOnly(['status']) &&
+                       incoming().status in ['CONFIRMED', 'REJECTED'];
+
+      allow delete: if false;
     }
 
-    // 4. Dispute validation helper
-    function isValidDispute(data) {
-      return data.id is string && data.id.size() <= 128 &&
-             data.itemId is string && data.itemId.size() <= 128 &&
-             data.itemTitle is string && data.itemTitle.size() <= 150 &&
-             data.reportedByUserId is string && data.reportedByUserId.size() <= 128 &&
-             data.reporterName is string && data.reporterName.size() <= 100 &&
-             data.targetUserId is string && data.targetUserId.size() <= 128 &&
-             data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 1000 &&
-             data.status in ['OUVERT', 'EN_MEDIATION', 'RESOLU'] &&
-             (!('resolutionNote' in data) || (data.resolutionNote is string && data.resolutionNote.size() <= 1000)) &&
-             (!('mediatorId' in data) || (data.mediatorId is string && data.mediatorId.size() <= 128));
+    // =================================================================================
+    //  Points relais
+    // =================================================================================
+    match /collectionPoints/{pointId} {
+      allow get, list: if signedIn();
+
+      allow create: if (isCertifiedAssociation() || isMediator()) &&
+                       incoming().ownerId == uid() &&
+                       incoming().createdAt == request.time &&
+                       nonEmpty(incoming().name, 2, 120) &&
+                       str(incoming().organizationName, 120) &&
+                       incoming().type in ['ORPHELINAT', 'PAROISSE', 'CHEFFERIE', 'CENTRE_SOCIAL', 'RESSOURCERIE'] &&
+                       incoming().city in cities() &&
+                       str(incoming().neighborhood, 100) && str(incoming().landmark, 150) &&
+                       str(incoming().contactPhone, 30) && str(incoming().openingHours, 150) &&
+                       str(incoming().acceptedCategories, 300) &&
+                       incoming().lat is number && incoming().lng is number;
+
+      allow update: if false;
+      allow delete: if signedIn() && (existing().ownerId == uid() || isMediator());
     }
 
+    // =================================================================================
+    //  Litiges (médiation)
+    // =================================================================================
     match /disputes/{disputeId} {
-      allow get: if isSignedIn() && (
-        resource.data.reportedByUserId == request.auth.uid ||
-        resource.data.targetUserId == request.auth.uid ||
-        isMediator()
-      );
+      allow get, list: if signedIn() && (existing().reporterId == uid() || isMediator());
 
-      allow list: if isSignedIn() && (
-        resource.data.reportedByUserId == request.auth.uid ||
-        isMediator()
-      );
+      allow create: if isActiveMember() &&
+                       incoming().reporterId == uid() &&
+                       incoming().status == 'OPEN' &&
+                       incoming().action == 'NONE' && incoming().mediatorId == '' &&
+                       incoming().resolutionNote == '' &&
+                       incoming().reportedUserId == itemData(incoming().itemId).donorId &&
+                       incoming().reportedUserId != uid() &&
+                       incoming().reason in ['ITEM_MISMATCH', 'NO_SHOW', 'COMMERCIAL_RESELL', 'SUSPICIOUS_BEHAVIOR', 'OTHER'] &&
+                       nonEmpty(incoming().description, 3, 1000) &&
+                       str(incoming().itemTitle, 150) && str(incoming().reporterName, 120) &&
+                       str(incoming().reportedUserName, 120) &&
+                       incoming().createdAt == request.time;
 
-      allow create: if isSignedIn() &&
-                       isValidId(disputeId) &&
-                       incoming().reportedByUserId == request.auth.uid &&
-                       incoming().status == 'OUVERT' &&
-                       incoming().createdAt is timestamp &&
-                       incoming().createdAt <= request.time &&
-                       isValidDispute(incoming());
+      allow update: if isMediator() &&
+                       changedOnly(['status', 'mediatorId', 'resolutionNote', 'action', 'updatedAt']) &&
+                       incoming().status in ['UNDER_REVIEW', 'RESOLVED', 'DISMISSED'] &&
+                       incoming().action in ['NONE', 'SUSPEND_ITEM', 'WARN_USER', 'SUSPEND_USER'] &&
+                       incoming().mediatorId == uid() &&
+                       str(incoming().resolutionNote, 1000);
 
-      allow update: if isSignedIn() &&
-                       isValidId(disputeId) &&
-                       incoming().id == existing().id &&
-                       incoming().reportedByUserId == existing().reportedByUserId &&
-                       incoming().createdAt == existing().createdAt &&
-                       isValidDispute(incoming()) &&
-                       isMediator();
+      allow delete: if false;
+    }
 
-      allow delete: if isMediator();
+    // =================================================================================
+    //  Avis : un seul par personne et par échange terminé
+    // =================================================================================
+    match /reviews/{reviewId} {
+      allow get, list: if signedIn();
+
+      allow create: if isActiveMember() &&
+                       incoming().authorId == uid() &&
+                       reviewId == incoming().itemId + '_' + uid() &&
+                       itemData(incoming().itemId).status == 'COMPLETED' &&
+                       ((itemData(incoming().itemId).donorId == uid() &&
+                         incoming().targetUserId == itemData(incoming().itemId).reservedByUserId) ||
+                        (itemData(incoming().itemId).reservedByUserId == uid() &&
+                         incoming().targetUserId == itemData(incoming().itemId).donorId)) &&
+                       incoming().rating is int && incoming().rating >= 1 && incoming().rating <= 5 &&
+                       str(incoming().comment, 500) && str(incoming().badge, 60) &&
+                       str(incoming().authorName, 120) && str(incoming().itemTitle, 150) &&
+                       incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // =================================================================================
+    //  Notifications internes
+    // =================================================================================
+    match /notifications/{notificationId} {
+      allow get, list: if signedIn() && existing().userId == uid();
+
+      allow create: if isActiveMember() &&
+                       incoming().fromUserId == uid() &&
+                       incoming().userId is string && incoming().userId != uid() &&
+                       incoming().read == false &&
+                       nonEmpty(incoming().title, 1, 100) && str(incoming().body, 300) &&
+                       incoming().type in ['EXCHANGE', 'MESSAGE', 'MODERATION', 'DISPUTE', 'FUNDRAISER', 'ASSOCIATION', 'GRAINS'];
+
+      allow update: if signedIn() && existing().userId == uid() &&
+                       changedOnly(['read']) && incoming().read == true;
+
+      allow delete: if signedIn() && existing().userId == uid();
     }
   }
 }

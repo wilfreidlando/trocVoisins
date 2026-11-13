@@ -70,7 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ExchangeType
-import com.example.data.model.ItemEntity
+import com.example.data.model.Item
 import com.example.ui.theme.DonGreen
 import com.example.ui.theme.ForestGreenDark
 import com.example.ui.theme.ForestGreenPrimary
@@ -82,11 +82,11 @@ import kotlin.math.sin
 
 @Composable
 fun InteractiveNeighborhoodMap(
-    items: List<ItemEntity>,
+    items: List<Item>,
     selectedRadiusKm: Float,
     onRadiusChange: (Float) -> Unit,
-    selectedItem: ItemEntity?,
-    onSelectItem: (ItemEntity?) -> Unit,
+    selectedItem: Item?,
+    onSelectItem: (Item?) -> Unit,
     onOpenItemDetail: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -117,7 +117,7 @@ fun InteractiveNeighborhoodMap(
                         val cy = h / 2f + panOffsetY
                         val scale = 36000f * zoomLevel
 
-                        var hitItem: ItemEntity? = null
+                        var hitItem: Item? = null
                         for (item in items) {
                             val px = cx + ((item.approximateLng - centerLng) * scale).toFloat()
                             val py = cy - ((item.approximateLat - centerLat) * scale).toFloat()
